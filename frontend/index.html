@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>日切放行</title>
+<script src="/static/vue.global.prod.js"></script>
+<style>
+  :root{--bg:#0b1220;--panel:#121a2b;--line:#243049;--text:#e8eefc;--muted:#93a0b8;--ok:#3ddc97;--bad:#ff6b6b;--accent:#4cc9f0}
+  *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--text);font-family:"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
+  .top{display:flex;align-items:center;gap:18px;padding:14px 20px;border-bottom:1px solid var(--line);background:#0e1626}
+  .brand{font-weight:700;letter-spacing:.08em;font-size:18px}
+  .brand small{display:block;color:var(--muted);font-weight:400;font-size:11px;letter-spacing:.02em;margin-top:2px}
+  .tabs{display:flex;gap:6px;flex:1}
+  .tabs button{background:transparent;border:1px solid transparent;color:var(--muted);padding:8px 12px;border-radius:999px;cursor:pointer}
+  .tabs button.on{color:var(--text);border-color:var(--line);background:#18233a}
+  .user{color:var(--muted);font-size:13px}
+  .ghost{background:#18233a;border:1px solid var(--line);color:var(--text);padding:7px 10px;border-radius:8px;cursor:pointer}
+  main{padding:18px 20px 28px}
+  .grid{display:grid;grid-template-columns:1.2fr .8fr;gap:14px}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px}
+  h2{margin:0 0 10px;font-size:15px;color:#c9d4ea}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{padding:8px 6px;border-bottom:1px solid var(--line);text-align:left}
+  th{color:var(--muted);font-weight:600}
+  input,select{width:100%;background:#0b1220;border:1px solid var(--line);color:var(--text);border-radius:8px;padding:8px 10px;margin:4px 0 10px}
+  .row{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+  .primary{background:var(--accent);color:#041018;border:0;padding:9px 12px;border-radius:8px;font-weight:700;cursor:pointer}
+  .mono{font-family:Consolas,"Courier New",monospace}
+  .tag{display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;background:#1b2a22;color:var(--ok)}
+  .tag.bad{background:#2a1518;color:var(--bad)}
+  .login{max-width:400px;margin:12vh auto;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:22px}
+  .err{color:var(--bad);min-height:18px;font-size:13px}
+  .kpi{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:14px}
+  .kpi .panel{padding:12px}.kpi b{display:block;font-size:22px;margin-top:4px}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<noscript><p style="padding:24px;background:#b91c1c;color:#fff">需要启用 JavaScript</p></noscript>
+<div id="boot-hint" style="display:none;padding:24px;font-family:sans-serif;background:#fef3c7;color:#111">页面脚本未加载。请确认可访问 /static/vue.global.prod.js</div>
+<script>
+setTimeout(function () {
+  if (!window.Vue) {
+    var e = document.getElementById("boot-hint");
+    if (e) e.style.display = "block";
+  }
+}, 800);
+</script>
+
+<script>
+const {createApp,ref,onMounted,computed}=Vue;
+createApp({
+  setup(){
+    const token=ref(localStorage.getItem('slicegate_token')||'');
+    const user=ref(localStorage.getItem('slicegate_user')||'');
+    const username=ref('admin'), password=ref('123456'), err=ref(''), tab=ref(0), actionErr=ref('');
+    const slices=ref([]), releases=ref([]), watermarks=ref([]);
+    const form=ref({slice_no:'SL-2026-11-03-east',biz_date:'2026-11-03',partition_key:'east',row_count:1000,expected_count:1000});
+    const releaseSliceId=ref(1), consumer=ref('ads_order');
+    const nav=['切片登记','完整度裁决','下游放行','消费水位'];
+    const completeCnt=computed(()=>slices.value.filter(s=>s.completeness==='完整').length);
+    const openCnt=computed(()=>slices.value.filter(s=>s.release_status!=='已放行').length);
+    function auth(){return {Authorization:'Bearer '+token.value,'Content-Type':'application/json'};}
+    async function login(){
+      err.value='';
+      const r=await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:username.value,password:password.value})});
+      const j=await r.json(); if(!r.ok){err.value=j.detail||'登录失败';return;}
+      token.value=j.token; user.value=j.username;
+      localStorage.setItem('slicegate_token',j.token); localStorage.setItem('slicegate_user',j.username);
+      await refresh();
+    }
+    function logout(){token.value='';user.value='';localStorage.removeItem('slicegate_token');localStorage.removeItem('slicegate_user');}
+    async function loadJson(url){
+      const r=await fetch(url,{headers:auth()});
+      const j=await r.json().catch(()=>({}));
+      if(r.status===401){ logout(); return null; }
+      return j;
+    }
+    async function refresh(){
+      if(!token.value) return;
+      const s=await loadJson('/api/slices'); if(s===null) return;
+      slices.value=Array.isArray(s.items)?s.items:[];
+      const rel=await loadJson('/api/releases'); if(rel===null) return;
+      releases.value=Array.isArray(rel.items)?rel.items:[];
+      const w=await loadJson('/api/watermarks'); if(w===null) return;
+      watermarks.value=Array.isArray(w.items)?w.items:[];
+      if(slices.value.length) releaseSliceId.value=slices.value[0].id;
+    }
+    async function createSlice(){actionErr.value='';const r=await fetch('/api/slices',{method:'POST',headers:auth(),body:JSON.stringify(form.value)});const j=await r.json();if(!r.ok)actionErr.value=j.detail||'失败';await refresh();}
+    async function evaluate(id){await fetch('/api/slices/'+id+'/evaluate',{method:'POST',headers:auth()});await refresh();}
+    async function doRelease(){actionErr.value='';const r=await fetch('/api/slices/'+releaseSliceId.value+'/release',{method:'POST',headers:auth(),body:JSON.stringify({consumer:consumer.value})});const j=await r.json();if(!r.ok)actionErr.value=j.detail||'放行失败';await refresh();}
+    onMounted(()=>{if(token.value)refresh();});
+    return {token,user,username,password,err,tab,nav,slices,releases,watermarks,form,releaseSliceId,consumer,actionErr,completeCnt,openCnt,login,logout,createSlice,evaluate,doRelease};
+  },
+  template:`
+  <div v-if="!token" class="login">
+    <div class="brand">日切放行<small>分区切片完整度闸 · 本地 SQLite</small></div>
+    <label>用户名</label><input v-model="username"/><label>密码</label><input type="password" v-model="password"/>
+    <div class="err">{{err}}</div><button class="primary" style="width:100%" @click="login">进入控制台</button>
+  </div>
+  <div v-if="token">
+    <div class="top">
+      <div class="brand">日切放行<small>切片 → 完整度 → 放行 → 水位</small></div>
+      <div class="tabs"><button v-for="(n,i) in nav" :key="n" :class="{on:tab===i}" @click="tab=i">{{n}}</button></div>
+      <div class="user">{{user}}</div><button class="ghost" @click="logout">退出</button>
+    </div>
+    <main>
+      <div class="kpi">
+        <div class="panel">切片总数<b class="mono">{{slices.length}}</b></div>
+        <div class="panel">已完整<b class="mono">{{completeCnt}}</b></div>
+        <div class="panel">未放行<b class="mono">{{openCnt}}</b></div>
+      </div>
+      <div v-show="tab===0" class="grid">
+        <div class="panel">
+          <h2>在途切片</h2>
+          <table><thead><tr><th>切片号</th><th>日/区</th><th>实收</th><th>完整度</th><th></th></tr></thead>
+          <tbody><tr v-for="s in slices" :key="s.id">
+            <td class="mono">{{s.slice_no}}</td><td>{{s.biz_date}} / {{s.partition_key}}</td>
+            <td class="mono">{{s.row_count}}/{{s.expected_count}}</td>
+            <td><span class="tag" :class="{bad:s.completeness!=='完整'}">{{s.completeness}}</span></td>
+            <td><button class="ghost" @click="evaluate(s.id)">重裁</button></td>
+          </tr></tbody></table>
+        </div>
+        <div class="panel">
+          <h2>登记切片</h2>
+          <div class="row"><div><label>切片号</label><input v-model="form.slice_no"/></div><div><label>业务日</label><input v-model="form.biz_date"/></div></div>
+          <div class="row"><div><label>分区</label><input v-model="form.partition_key"/></div><div><label>实收</label><input type="number" v-model.number="form.row_count"/></div></div>
+          <label>期望</label><input type="number" v-model.number="form.expected_count"/>
+          <button class="primary" @click="createSlice">写入登记</button>
+          <div class="err">{{actionErr}}</div>
+        </div>
+      </div>
+      <div v-show="tab===1" class="panel">
+        <h2>完整度裁决</h2>
+        <table><thead><tr><th>切片</th><th>缺口</th><th>结论</th><th>放行态</th></tr></thead>
+        <tbody><tr v-for="s in slices" :key="'c'+s.id">
+          <td class="mono">{{s.slice_no}}</td><td class="mono">{{Math.max(s.expected_count-s.row_count,0)}}</td>
+          <td>{{s.completeness}}</td><td>{{s.release_status}}</td>
+        </tr></tbody></table>
+      </div>
+      <div v-show="tab===2" class="grid">
+        <div class="panel">
+          <h2>申请放行</h2>
+          <label>切片</label><select v-model.number="releaseSliceId"><option v-for="s in slices" :value="s.id">{{s.slice_no}}（{{s.completeness}}）</option></select>
+          <label>下游</label><input v-model="consumer"/>
+          <button class="primary" @click="doRelease">放行</button>
+          <div class="err">{{actionErr}}</div>
+        </div>
+        <div class="panel">
+          <h2>放行流水</h2>
+          <table><thead><tr><th>切片</th><th>下游</th><th>结果</th><th>时间</th></tr></thead>
+          <tbody><tr v-for="r in releases" :key="r.id"><td class="mono">{{r.slice_no}}</td><td>{{r.consumer}}</td><td>{{r.status}}</td><td class="mono">{{r.created_at}}</td></tr></tbody></table>
+        </div>
+      </div>
+      <div v-show="tab===3" class="panel">
+        <h2>消费水位</h2>
+        <table><thead><tr><th>消费方</th><th>业务日</th><th>水位</th><th>来源切片</th></tr></thead>
+        <tbody><tr v-for="w in watermarks" :key="w.id"><td>{{w.consumer}}</td><td>{{w.biz_date}}</td><td class="mono">{{w.watermark}}</td><td class="mono">{{w.source_slice}}</td></tr></tbody></table>
+      </div>
+    </main>
+  </div>`
+}).mount('#app');
+</script>
+</body>
+</html>
