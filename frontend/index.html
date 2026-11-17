@@ -6,22 +6,23 @@
 <title>日切放行</title>
 <script src="/static/vue.global.prod.js"></script>
 <style>
-  :root{--bg:#0b1220;--panel:#121a2b;--line:#243049;--text:#e8eefc;--muted:#93a0b8;--ok:#3ddc97;--bad:#ff6b6b;--accent:#4cc9f0}
+  :root{--bg:#0b1220;--panel:#121a2b;--line:#243049;--text:#e8eefc;--muted:#93a0b8;--ok:#3ddc97;--bad:#ff6b6b;--accent:#4cc9f0;--warn:#ffd166}
   *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--text);font-family:"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
   .top{display:flex;align-items:center;gap:18px;padding:14px 20px;border-bottom:1px solid var(--line);background:#0e1626}
   .brand{font-weight:700;letter-spacing:.08em;font-size:18px}
   .brand small{display:block;color:var(--muted);font-weight:400;font-size:11px;letter-spacing:.02em;margin-top:2px}
-  .tabs{display:flex;gap:6px;flex:1}
+  .tabs{display:flex;gap:6px;flex:1;flex-wrap:wrap}
   .tabs button{background:transparent;border:1px solid transparent;color:var(--muted);padding:8px 12px;border-radius:999px;cursor:pointer}
   .tabs button.on{color:var(--text);border-color:var(--line);background:#18233a}
   .user{color:var(--muted);font-size:13px}
   .ghost{background:#18233a;border:1px solid var(--line);color:var(--text);padding:7px 10px;border-radius:8px;cursor:pointer}
+  .ghost.warn{color:var(--warn);border-color:#5c4a1f}
   main{padding:18px 20px 28px}
   .grid{display:grid;grid-template-columns:1.2fr .8fr;gap:14px}
   .panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px}
   h2{margin:0 0 10px;font-size:15px;color:#c9d4ea}
   table{width:100%;border-collapse:collapse;font-size:13px}
-  th,td{padding:8px 6px;border-bottom:1px solid var(--line);text-align:left}
+  th,td{padding:8px 6px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
   th{color:var(--muted);font-weight:600}
   input,select{width:100%;background:#0b1220;border:1px solid var(--line);color:var(--text);border-radius:8px;padding:8px 10px;margin:4px 0 10px}
   .row{display:grid;grid-template-columns:1fr 1fr;gap:8px}
@@ -29,10 +30,20 @@
   .mono{font-family:Consolas,"Courier New",monospace}
   .tag{display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;background:#1b2a22;color:var(--ok)}
   .tag.bad{background:#2a1518;color:var(--bad)}
+  .tag.void{background:#22283a;color:var(--muted)}
+  .tag.lock{background:#2a1518;color:var(--bad)}
   .login{max-width:400px;margin:12vh auto;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:22px}
   .err{color:var(--bad);min-height:18px;font-size:13px}
+  .okmsg{color:var(--ok);min-height:18px;font-size:13px}
   .kpi{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:14px}
   .kpi .panel{padding:12px}.kpi b{display:block;font-size:22px;margin-top:4px}
+  .note{color:var(--muted);font-size:12px;line-height:1.5}
+  .plan{background:#0e1b2c;border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:12px;font-size:13px;line-height:1.6}
+  .plan b{color:var(--accent)}
+  .detail{background:#0e1b2c;border:1px solid var(--line);border-radius:10px;padding:12px;margin-top:12px;font-size:13px;line-height:1.7}
+  .pill{display:inline-block;padding:1px 7px;border-radius:999px;font-size:11px;background:#1b2a22;color:var(--ok)}
+  .pill.off{background:#2a1518;color:var(--bad)}
+  .scroll{max-height:420px;overflow:auto}
 </style>
 </head>
 <body>
@@ -54,14 +65,21 @@ createApp({
   setup(){
     const token=ref(localStorage.getItem('slicegate_token')||'');
     const user=ref(localStorage.getItem('slicegate_user')||'');
-    const username=ref('admin'), password=ref('123456'), err=ref(''), tab=ref(0), actionErr=ref('');
+    const username=ref('admin'), password=ref('123456'), err=ref(''), tab=ref(0), actionErr=ref(''), actionOk=ref('');
     const slices=ref([]), releases=ref([]), watermarks=ref([]);
     const form=ref({slice_no:'SL-2026-11-03-east',biz_date:'2026-11-03',partition_key:'east',row_count:1000,expected_count:1000});
     const releaseSliceId=ref(1), consumer=ref('ads_order');
-    const nav=['切片登记','完整度裁决','下游放行','消费水位'];
+    const nav=['切片登记','完整度裁决','下游放行','消费水位','策略台','关日台'];
+    const spec=ref({plan:'甲',plan_desc:'',rules:[]});
+    const bstate=ref({current_biz_date:'',locks:[],day_cuts:[],active_count:0,residue_count:0,deviation_count:0,contention_count:0});
+    const audits=ref([]);
+    const lockForm=ref({slice_id:null,reason:'策略锁定'});
+    const cutDate=ref('');
+    const detail=ref(null);
     const completeCnt=computed(()=>slices.value.filter(s=>s.completeness==='完整').length);
     const openCnt=computed(()=>slices.value.filter(s=>s.release_status!=='已放行').length);
     function auth(){return {Authorization:'Bearer '+token.value,'Content-Type':'application/json'};}
+    function flash(j,okMsg){actionErr.value='';actionOk.value='';if(j&&j.detail)actionErr.value=j.detail;else if(okMsg)actionOk.value=okMsg;}
     async function login(){
       err.value='';
       const r=await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:username.value,password:password.value})});
@@ -77,21 +95,38 @@ createApp({
       if(r.status===401){ logout(); return null; }
       return j;
     }
+    async function postJson(url,payload){
+      const r=await fetch(url,{method:'POST',headers:auth(),body:JSON.stringify(payload||{})});
+      const j=await r.json().catch(()=>({}));
+      return {ok:r.ok,status:r.status,j};
+    }
     async function refresh(){
       if(!token.value) return;
       const s=await loadJson('/api/slices'); if(s===null) return;
       slices.value=Array.isArray(s.items)?s.items:[];
+      if(s.current_biz_date) bstate.value.current_biz_date=s.current_biz_date;
       const rel=await loadJson('/api/releases'); if(rel===null) return;
       releases.value=Array.isArray(rel.items)?rel.items:[];
       const w=await loadJson('/api/watermarks'); if(w===null) return;
       watermarks.value=Array.isArray(w.items)?w.items:[];
-      if(slices.value.length) releaseSliceId.value=slices.value[0].id;
+      if(slices.value.length && !lockForm.value.slice_id) lockForm.value.slice_id=slices.value[0].id;
+      const sp=await loadJson('/api/boundary/spec'); if(sp) spec.value=sp;
+      const bs=await loadJson('/api/boundary/state'); if(bs) bstate.value=bs;
+      const au=await loadJson('/api/boundary/audit'); if(au) audits.value=Array.isArray(au.items)?au.items:[];
     }
-    async function createSlice(){actionErr.value='';const r=await fetch('/api/slices',{method:'POST',headers:auth(),body:JSON.stringify(form.value)});const j=await r.json();if(!r.ok)actionErr.value=j.detail||'失败';await refresh();}
-    async function evaluate(id){await fetch('/api/slices/'+id+'/evaluate',{method:'POST',headers:auth()});await refresh();}
-    async function doRelease(){actionErr.value='';const r=await fetch('/api/slices/'+releaseSliceId.value+'/release',{method:'POST',headers:auth(),body:JSON.stringify({consumer:consumer.value})});const j=await r.json();if(!r.ok)actionErr.value=j.detail||'放行失败';await refresh();}
+    async function createSlice(){const r=await postJson('/api/slices',form.value);flash(r.j,r.ok?'写入登记成功':'');await refresh();}
+    async function evaluate(id){await postJson('/api/slices/'+id+'/evaluate',{});await refresh();}
+    async function doRelease(){const r=await postJson('/api/slices/'+releaseSliceId.value+'/release',{consumer:consumer.value});flash(r.j,r.ok?(r.j.note||'放行成功'):'');await refresh();}
+    async function pinLock(){const r=await postJson('/api/slices/'+lockForm.value.slice_id+'/lock',{reason:lockForm.value.reason});flash(r.j,r.ok?('已在业务日'+bstate.value.current_biz_date+'钉下策略锁#'+r.j.lock_id):'');await refresh();}
+    async function voidLock(id){const r=await postJson('/api/boundary/locks/'+id+'/void',{reason:'人工解锁'});flash(r.j,r.ok?'锁定已作废并留审计':'');await refresh();}
+    async function carryover(id){const r=await postJson('/api/boundary/carryover/'+id,{});flash(r.j,'');await refresh();}
+    async function doDayCut(){const payload=cutDate.value?{to_biz_date:cutDate.value}:{};const r=await postJson('/api/boundary/day-cut',payload);flash(r.j,r.ok?('日切完成：'+r.j.from+' → '+r.j.to+'，同事务作废锁定'+r.j.voided_locks+'笔'):'');if(r.ok)cutDate.value='';await refresh();}
+    async function showBoundary(id){detail.value=null;const j=await loadJson('/api/slices/'+id+'/boundary');if(j)detail.value=j;}
+    function payloadTxt(p){try{return JSON.stringify(JSON.parse(p));}catch(e){return p;}}
     onMounted(()=>{if(token.value)refresh();});
-    return {token,user,username,password,err,tab,nav,slices,releases,watermarks,form,releaseSliceId,consumer,actionErr,completeCnt,openCnt,login,logout,createSlice,evaluate,doRelease};
+    return {token,user,username,password,err,tab,nav,slices,releases,watermarks,form,releaseSliceId,consumer,
+      actionErr,actionOk,spec,bstate,audits,lockForm,cutDate,detail,completeCnt,openCnt,
+      login,logout,createSlice,evaluate,doRelease,pinLock,voidLock,carryover,doDayCut,showBoundary,payloadTxt};
   },
   template:`
   <div v-if="!token" class="login">
@@ -101,7 +136,7 @@ createApp({
   </div>
   <div v-if="token">
     <div class="top">
-      <div class="brand">日切放行<small>切片 → 完整度 → 放行 → 水位</small></div>
+      <div class="brand">日切放行<small>切片 → 完整度 → 放行 → 水位 · 日界口径：{{spec.plan}}方案</small></div>
       <div class="tabs"><button v-for="(n,i) in nav" :key="n" :class="{on:tab===i}" @click="tab=i">{{n}}</button></div>
       <div class="user">{{user}}</div><button class="ghost" @click="logout">退出</button>
     </div>
@@ -109,18 +144,27 @@ createApp({
       <div class="kpi">
         <div class="panel">切片总数<b class="mono">{{slices.length}}</b></div>
         <div class="panel">已完整<b class="mono">{{completeCnt}}</b></div>
-        <div class="panel">未放行<b class="mono">{{openCnt}}</b></div>
+        <div class="panel">当前业务日<b class="mono">{{bstate.current_biz_date}}</b></div>
       </div>
       <div v-show="tab===0" class="grid">
         <div class="panel">
-          <h2>在途切片</h2>
-          <table><thead><tr><th>切片号</th><th>日/区</th><th>实收</th><th>完整度</th><th></th></tr></thead>
-          <tbody><tr v-for="s in slices" :key="s.id">
-            <td class="mono">{{s.slice_no}}</td><td>{{s.biz_date}} / {{s.partition_key}}</td>
-            <td class="mono">{{s.row_count}}/{{s.expected_count}}</td>
-            <td><span class="tag" :class="{bad:s.completeness!=='完整'}">{{s.completeness}}</span></td>
-            <td><button class="ghost" @click="evaluate(s.id)">重裁</button></td>
-          </tr></tbody></table>
+          <h2>在途切片（目录旁注与详情同源）</h2>
+          <table><thead><tr><th>切片号</th><th>日/区</th><th>实收</th><th>完整度</th><th>日界旁注</th><th></th></tr></thead>
+            <tbody><tr v-for="s in slices" :key="s.id">
+              <td class="mono">{{s.slice_no}}</td><td>{{s.biz_date}} / {{s.partition_key}}</td>
+              <td class="mono">{{s.row_count}}/{{s.expected_count}}</td>
+              <td><span class="tag" :class="{bad:s.completeness!=='完整'}">{{s.completeness}}</span></td>
+              <td class="note"><span class="pill" :class="{off:s.boundary_locked}">{{s.boundary_locked?'锁定':'可放行'}}</span> {{s.boundary_note}}</td>
+              <td style="white-space:nowrap"><button class="ghost" @click="evaluate(s.id)">重裁</button>
+              <button class="ghost" @click="showBoundary(s.id)">详情旁注</button></td>
+            </tr></tbody></table>
+          <div v-if="detail" class="detail">
+            <b>详情旁注 · 切片#{{detail.slice_id}}</b><br/>
+            当前业务日：<span class="mono">{{detail.current_biz_date}}</span>（口径：{{detail.plan}}方案）<br/>
+            {{detail.boundary_note}}<br/>
+            同日审计（近10条）：
+            <div v-for="a in detail.recent_audit" :key="a.id" class="note mono">[{{a.created_at}}] {{a.event_type}} {{payloadTxt(a.payload)}}</div>
+          </div>
         </div>
         <div class="panel">
           <h2>登记切片</h2>
@@ -128,35 +172,89 @@ createApp({
           <div class="row"><div><label>分区</label><input v-model="form.partition_key"/></div><div><label>实收</label><input type="number" v-model.number="form.row_count"/></div></div>
           <label>期望</label><input type="number" v-model.number="form.expected_count"/>
           <button class="primary" @click="createSlice">写入登记</button>
-          <div class="err">{{actionErr}}</div>
+          <div class="err">{{actionErr}}</div><div class="okmsg">{{actionOk}}</div>
         </div>
       </div>
       <div v-show="tab===1" class="panel">
         <h2>完整度裁决</h2>
-        <table><thead><tr><th>切片</th><th>缺口</th><th>结论</th><th>放行态</th></tr></thead>
-        <tbody><tr v-for="s in slices" :key="'c'+s.id">
-          <td class="mono">{{s.slice_no}}</td><td class="mono">{{Math.max(s.expected_count-s.row_count,0)}}</td>
-          <td>{{s.completeness}}</td><td>{{s.release_status}}</td>
-        </tr></tbody></table>
+        <table><thead><tr><th>切片</th><th>缺口</th><th>结论</th><th>放行态</th><th>日界旁注</th></tr></thead>
+          <tbody><tr v-for="s in slices" :key="'c'+s.id">
+            <td class="mono">{{s.slice_no}}</td><td class="mono">{{Math.max(s.expected_count-s.row_count,0)}}</td>
+            <td>{{s.completeness}}</td><td>{{s.release_status}}</td><td class="note">{{s.boundary_note}}</td>
+          </tr></tbody></table>
       </div>
       <div v-show="tab===2" class="grid">
         <div class="panel">
-          <h2>申请放行</h2>
+          <h2>申请放行（日界逻辑在服务端裁决）</h2>
           <label>切片</label><select v-model.number="releaseSliceId"><option v-for="s in slices" :value="s.id">{{s.slice_no}}（{{s.completeness}}）</option></select>
           <label>下游</label><input v-model="consumer"/>
           <button class="primary" @click="doRelease">放行</button>
-          <div class="err">{{actionErr}}</div>
+          <div class="err">{{actionErr}}</div><div class="okmsg">{{actionOk}}</div>
         </div>
         <div class="panel">
-          <h2>放行流水</h2>
-          <table><thead><tr><th>切片</th><th>下游</th><th>结果</th><th>时间</th></tr></thead>
-          <tbody><tr v-for="r in releases" :key="r.id"><td class="mono">{{r.slice_no}}</td><td>{{r.consumer}}</td><td>{{r.status}}</td><td class="mono">{{r.created_at}}</td></tr></tbody></table>
+          <h2>放行流水（成功/拒绝含日界备注）</h2>
+          <div class="scroll"><table><thead><tr><th>切片</th><th>下游</th><th>结果</th><th>备注</th><th>时间</th></tr></thead>
+            <tbody><tr v-for="r in releases" :key="r.id"><td class="mono">{{r.slice_no}}</td><td>{{r.consumer}}</td>
+              <td><span class="tag" :class="{bad:r.status!=='成功'}">{{r.status}}</span></td>
+              <td class="note">{{r.note}}</td><td class="mono">{{r.created_at}}</td></tr></tbody></table></div>
         </div>
       </div>
       <div v-show="tab===3" class="panel">
         <h2>消费水位</h2>
         <table><thead><tr><th>消费方</th><th>业务日</th><th>水位</th><th>来源切片</th></tr></thead>
-        <tbody><tr v-for="w in watermarks" :key="w.id"><td>{{w.consumer}}</td><td>{{w.biz_date}}</td><td class="mono">{{w.watermark}}</td><td class="mono">{{w.source_slice}}</td></tr></tbody></table>
+          <tbody><tr v-for="w in watermarks" :key="w.id"><td>{{w.consumer}}</td><td>{{w.biz_date}}</td><td class="mono">{{w.watermark}}</td><td class="mono">{{w.source_slice}}</td></tr></tbody></table>
+      </div>
+      <div v-show="tab===4">
+        <div class="plan">钉死口径：<b>{{spec.plan}}方案</b>——{{spec.plan_desc}}。当天不得更换；乙方案结转请求会被拒绝并登记日界口径偏差。说明文档：docs/日界锁定说明.md
+          <div v-for="(r,i) in spec.rules" :key="i" class="note">· {{r}}</div>
+        </div>
+        <div class="grid">
+          <div class="panel">
+            <h2>钉策略（与日切互斥，后手记日界争用）</h2>
+            <label>切片</label><select v-model.number="lockForm.slice_id"><option v-for="s in slices" :value="s.id">{{s.slice_no}}（{{s.biz_date}}）</option></select>
+            <label>锁定原因</label><input v-model="lockForm.reason"/>
+            <button class="primary" @click="pinLock">钉下策略锁</button>
+            <div class="err">{{actionErr}}</div><div class="okmsg">{{actionOk}}</div>
+          </div>
+          <div class="panel">
+            <h2>策略台读数 · 业务日 <span class="mono">{{bstate.current_biz_date}}</span></h2>
+            <p class="note">生效锁 {{bstate.active_count}} 笔｜跨日残留 {{bstate.residue_count}} 笔｜口径偏差 {{bstate.deviation_count}} 次｜日界争用 {{bstate.contention_count}} 次</p>
+            <div class="scroll"><table><thead><tr><th>锁号</th><th>切片</th><th>锁定业务日</th><th>状态</th><th>原因/作废</th><th>操作</th></tr></thead>
+              <tbody><tr v-for="l in bstate.locks" :key="l.id">
+                <td class="mono">#{{l.id}}</td><td class="mono">切片#{{l.slice_id}}</td><td class="mono">{{l.biz_date}}</td>
+                <td><span class="tag" :class="{void:l.status!=='生效',lock:l.status==='生效'}">{{l.status}}</span></td>
+                <td class="note">{{l.reason}}<template v-if="l.void_reason"><br/>⤷ {{l.void_reason}}</template></td>
+                <td style="white-space:nowrap">
+                  <button class="ghost" :disabled="l.status!=='生效'" @click="voidLock(l.id)">作废</button>
+                  <button class="ghost warn" :disabled="l.status!=='生效'" @click="carryover(l.id)">结转(乙)</button>
+                </td>
+              </tr></tbody></table></div>
+          </div>
+        </div>
+      </div>
+      <div v-show="tab===5">
+        <div class="grid">
+          <div class="panel">
+            <h2>关日台 · 日切（同事务作废昨日锁定）</h2>
+            <label>目标业务日（留空＝自然日 +1）</label><input v-model="cutDate" placeholder="YYYY-MM-DD"/>
+            <button class="primary" @click="doDayCut">执行日切</button>
+            <div class="err">{{actionErr}}</div><div class="okmsg">{{actionOk}}</div>
+            <p class="note" style="margin-top:10px">业务日只能向前；回拨/混子日会被拒绝并登记日界口径偏差。当前业务日：<span class="mono">{{bstate.current_biz_date}}</span></p>
+            <h2 style="margin-top:14px">日切流水</h2>
+            <table><thead><tr><th>#</th><th>自</th><th>至</th><th>作废锁</th><th>操作人</th><th>时间</th></tr></thead>
+              <tbody><tr v-for="d in bstate.day_cuts" :key="d.id"><td class="mono">{{d.id}}</td><td class="mono">{{d.from_biz_date}}</td>
+                <td class="mono">{{d.to_biz_date}}</td><td class="mono">{{d.voided_locks}}</td><td>{{d.operator}}</td><td class="mono">{{d.created_at}}</td></tr></tbody></table>
+          </div>
+          <div class="panel">
+            <h2>日界审计（偏差/争用/清理全留痕）</h2>
+            <div class="scroll"><table><thead><tr><th>时间</th><th>事件</th><th>业务日</th><th>内容</th><th>操作人</th></tr></thead>
+              <tbody><tr v-for="a in audits" :key="a.id">
+                <td class="mono">{{a.created_at}}</td>
+                <td><span class="tag" :class="{bad:a.event_type==='日界口径偏差'||a.event_type==='日界争用'}">{{a.event_type}}</span></td>
+                <td class="mono">{{a.biz_date}}</td><td class="note mono">{{payloadTxt(a.payload)}}</td><td>{{a.operator}}</td>
+              </tr></tbody></table></div>
+          </div>
+        </div>
       </div>
     </main>
   </div>`

@@ -5,7 +5,9 @@ from app import app, init_db
 
 @pytest.fixture(autouse=True)
 def _db(tmp_path, monkeypatch):
-    monkeypatch.setattr("app.DB_PATH", tmp_path / "t.db")
+    db = tmp_path / "t.db"
+    monkeypatch.setattr("app.DB_PATH", db)
+    monkeypatch.setattr("day_boundary.DB_PATH", db)
     init_db()
     yield
 
